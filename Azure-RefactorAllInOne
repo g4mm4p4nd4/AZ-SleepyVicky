@@ -1,0 +1,580 @@
+#!/bin/bash
+# create-slpyvky-azure-serverless.sh
+# This script creates a complete scaffold for an Azure Serverless Deployment project named "slpyvky".
+# It sets up a React frontend, Azure Functions backend (refactored from Express),
+# an ARM template for IaC, and a deployment script.
+# ----------------------------------------------------------------------
+# Code Review Notes:
+# - Ensure that all secret placeholders (e.g. DATABASE_URL, TWILIO credentials, etc.) are updated before production.
+# - The resource names follow Azure naming conventions and include the project name "slpyvky".
+# - The SignalR hub name has been updated to "slpyvky-mediahub" for consistency.
+# - Validate that the ARM template parameters and deploy script variables match your desired configuration.
+# ----------------------------------------------------------------------
+
+set -e
+
+echo "Creating project scaffold for Azure Serverless Deployment: slpyvky..."
+
+############################
+# Create Frontend Directory
+############################
+mkdir -p frontend/public frontend/src
+
+# frontend/package.json
+cat << 'EOF' > frontend/package.json
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "react-scripts": "5.0.1",
+    "typescript": "^4.9.5"
+  }
+}
+EOF
+
+# frontend/public/index.html
+cat << 'EOF' > frontend/public/index.html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>slpyvky Azure Serverless App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+EOF
+
+# frontend/src/App.tsx
+cat << 'EOF' > frontend/src/App.tsx
+import React, { useEffect, useState } from 'react';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:7071/api';
+
+function App() {
+  const [calls, setCalls] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch(\`\${API_URL}/GetCallsFunction\`)
+      .then(res => res.json())
+      .then(data => setCalls(data))
+      .catch(err => console.error(err));
+  }, []);
+
+  return (
+    <div style={{ padding: '2rem' }}>
+      <h1>slpyvky Azure Serverless App</h1>
+      <p>This is the refactored React frontend deployed as a Static Web App.</p>
+      <h2>Calls</h2>
+      <ul>
+        {calls.map(call => (
+          <li key={call.id}>{call.phoneNumber} - {call.status}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export default App;
+EOF
+
+# frontend/src/index.tsx
+cat << 'EOF' > frontend/src/index.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root')!);
+root.render(<App />);
+EOF
+
+# frontend/staticwebapp.config.json (updated with slpyvky-function)
+cat << 'EOF' > frontend/staticwebapp.config.json
+{
+  "routes": [
+    {
+      "route": "/api/*",
+      "rewrite": "https://slpyvky-function.azurewebsites.net/api/{*rest}"
+    },
+    {
+      "route": "/*",
+      "serve": "/index.html"
+    }
+  ]
+}
+EOF
+
+#################################
+# Create Functions Directory Tree
+#################################
+mkdir -p functions/VoiceFunction functions/GetCallsFunction functions/CreateCallFunction functions/SignalRNegotiate functions/shared
+
+# functions/host.json
+cat << 'EOF' > functions/host.json
+{
+  "version": "2.0"
+}
+EOF
+
+# functions/local.settings.json (for local testing)
+cat << 'EOF' > functions/local.settings.json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "DATABASE_URL": "<your-database-connection-string>",
+    "TWILIO_ACCOUNT_SID": "<your-twilio-sid>",
+    "TWILIO_AUTH_TOKEN": "<your-twilio-auth-token>",
+    "TWILIO_PHONE_NUMBER": "<your-twilio-phone-number>",
+    "OPENAI_API_KEY": "<your-openai-api-key>",
+    "SIGNALR_MEDIA_STREAM_URL": "wss://slpyvky-signalr.azurewebsites.net/slpyvky-mediahub"
+  }
+}
+EOF
+
+##############################################
+# functions/VoiceFunction (Twilio Webhook)
+##############################################
+# functions/VoiceFunction/index.ts
+cat << 'EOF' > functions/VoiceFunction/index.ts
+import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+import twilio from "twilio";
+
+const voiceFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    
+    // Use environment variable for media stream URL (pointing to your SignalR/Web PubSub negotiate endpoint)
+    const mediaStreamUrl = process.env.SIGNALR_MEDIA_STREAM_URL || "wss://slpyvky-signalr.azurewebsites.net/slpyvky-mediahub";
+    const connect = response.connect();
+    connect.stream({ url: mediaStreamUrl });
+
+    context.res = {
+        status: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: response.toString()
+    };
+};
+
+export default voiceFunction;
+EOF
+
+# functions/VoiceFunction/function.json
+cat << 'EOF' > functions/VoiceFunction/function.json
+{
+  "bindings": [
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": ["post"],
+      "route": "voice"
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "res"
+    }
+  ]
+}
+EOF
+
+##############################################
+# functions/GetCallsFunction (GET /api/calls)
+##############################################
+# functions/GetCallsFunction/index.ts
+cat << 'EOF' > functions/GetCallsFunction/index.ts
+import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+import { db } from "../shared/db";
+import { calls } from "../shared/schema";
+
+const getCallsFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
+    try {
+        const allCalls = await db.select().from(calls);
+        context.res = {
+            status: 200,
+            body: allCalls
+        };
+    } catch (error) {
+        context.log.error("Failed to fetch calls", error);
+        context.res = {
+            status: 500,
+            body: { error: "Failed to fetch calls" }
+        };
+    }
+};
+
+export default getCallsFunction;
+EOF
+
+# functions/GetCallsFunction/function.json
+cat << 'EOF' > functions/GetCallsFunction/function.json
+{
+  "bindings": [
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": ["get"],
+      "route": "GetCallsFunction"
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "res"
+    }
+  ]
+}
+EOF
+
+##############################################
+# functions/CreateCallFunction (POST /api/calls)
+##############################################
+# functions/CreateCallFunction/index.ts
+cat << 'EOF' > functions/CreateCallFunction/index.ts
+import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+import { db } from "../shared/db";
+import { calls, insertCallSchema } from "../shared/schema";
+import { ZodError } from "zod";
+
+const createCallFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
+    try {
+        const data = insertCallSchema.parse(req.body);
+        const newCall = await db.insert(calls).values(data).returning();
+        context.res = {
+            status: 200,
+            body: newCall
+        };
+    } catch (error) {
+        if (error instanceof ZodError) {
+            context.log.warn("Validation error", error.errors);
+            context.res = {
+                status: 400,
+                body: { error: error.errors }
+            };
+        } else {
+            context.log.error("Error creating call", error);
+            context.res = {
+                status: 500,
+                body: { error: "Failed to schedule call" }
+            };
+        }
+    }
+};
+
+export default createCallFunction;
+EOF
+
+# functions/CreateCallFunction/function.json
+cat << 'EOF' > functions/CreateCallFunction/function.json
+{
+  "bindings": [
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": ["post"],
+      "route": "CreateCallFunction"
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "res"
+    }
+  ]
+}
+EOF
+
+##############################################
+# SignalR Negotiate Function (Optional)
+##############################################
+# functions/SignalRNegotiate/index.ts
+cat << 'EOF' > functions/SignalRNegotiate/index.ts
+import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+
+const signalRNegotiate: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
+    // The output binding will automatically provide the connection info.
+    context.bindings.signalRConnectionInfo = {};
+};
+
+export default signalRNegotiate;
+EOF
+
+# functions/SignalRNegotiate/function.json
+cat << 'EOF' > functions/SignalRNegotiate/function.json
+{
+  "bindings": [
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": ["get", "post"],
+      "route": "negotiate"
+    },
+    {
+      "name": "signalRConnectionInfo",
+      "type": "signalRConnectionInfo",
+      "direction": "out",
+      "hubName": "slpyvky-mediahub"
+    }
+  ]
+}
+EOF
+
+##############################################
+# functions/shared/schema.ts
+##############################################
+cat << 'EOF' > functions/shared/schema.ts
+import { pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
+
+export const calls = pgTable("calls", {
+  id: serial("id").primaryKey(),
+  phoneNumber: text("phone_number").notNull(),
+  status: text("status").notNull().default("pending"),
+  startTime: timestamp("start_time").notNull().defaultNow(),
+  endTime: timestamp("end_time"),
+  duration: text("duration"),
+  callSid: text("call_sid").unique(),
+  scheduledTime: timestamp("scheduled_time"),
+  timezone: text("timezone")
+});
+
+export const insertCallSchema = createInsertSchema(calls).pick({
+  phoneNumber: true,
+  scheduledTime: true,
+  timezone: true
+}).extend({
+  phoneNumber: z.string().min(10, "Phone number must be at least 10 digits").max(15, "Phone number cannot exceed 15 digits").regex(/^\+?[1-9]\d{9,14}$/, "Invalid phone number format"),
+  scheduledTime: z.string().datetime().optional(),
+  timezone: z.string().optional()
+});
+EOF
+
+##############################################
+# functions/shared/db.ts
+##############################################
+cat << 'EOF' > functions/shared/db.ts
+import { Pool, neonConfig } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import * as schema from "./schema";
+
+neonConfig.webSocketConstructor = require("ws");
+
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must be set");
+}
+
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const db = drizzle({ client: pool, schema });
+EOF
+
+############################
+# ARM Template (IaC)
+############################
+cat << 'EOF' > arm-template.json
+{
+  "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "staticWebAppName": { "type": "string", "defaultValue": "slpyvky-static" },
+    "functionAppName": { "type": "string", "defaultValue": "slpyvky-function" },
+    "signalrName": { "type": "string", "defaultValue": "slpyvky-signalr" },
+    "postgresServerName": { "type": "string", "defaultValue": "slpyvky-postgres" },
+    "postgresAdminUser": { "type": "string" },
+    "postgresAdminPassword": { "type": "securestring" },
+    "location": { "type": "string", "defaultValue": "[resourceGroup().location]" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2022-09-01",
+      "name": "[toLower(concat(parameters('functionAppName'), 'storage'))]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Standard_LRS" },
+      "kind": "StorageV2",
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-03-01",
+      "name": "[concat(parameters('functionAppName'), 'plan')]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Y1", "tier": "Dynamic" },
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2022-03-01",
+      "name": "[parameters('functionAppName')]",
+      "location": "[parameters('location')]",
+      "kind": "functionapp",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', toLower(concat(parameters('functionAppName'), 'storage')))]",
+        "[resourceId('Microsoft.Web/serverfarms', concat(parameters('functionAppName'), 'plan'))]"
+      ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', concat(parameters('functionAppName'), 'plan'))]",
+        "siteConfig": {
+          "appSettings": [
+            { "name": "FUNCTIONS_WORKER_RUNTIME", "value": "node" },
+            { "name": "WEBSITE_RUN_FROM_PACKAGE", "value": "1" },
+            { "name": "DATABASE_URL", "value": "<your-database-connection-string>" },
+            { "name": "TWILIO_ACCOUNT_SID", "value": "<your-twilio-sid>" },
+            { "name": "TWILIO_AUTH_TOKEN", "value": "<your-twilio-auth-token>" },
+            { "name": "TWILIO_PHONE_NUMBER", "value": "<your-twilio-phone-number>" },
+            { "name": "OPENAI_API_KEY", "value": "<your-openai-api-key>" },
+            { "name": "SIGNALR_MEDIA_STREAM_URL", "value": "wss://slpyvky-signalr.azurewebsites.net/slpyvky-mediahub" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.SignalRService/SignalR",
+      "apiVersion": "2022-02-01",
+      "name": "[parameters('signalrName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Free",
+        "tier": "Free"
+      },
+      "properties": {
+        "features": [
+          { "flag": "ServiceMode", "value": "Serverless" }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Web/staticSites",
+      "apiVersion": "2022-03-01",
+      "name": "[parameters('staticWebAppName')]",
+      "location": "[parameters('location')]",
+      "kind": "static",
+      "properties": {
+        "repositoryUrl": "https://github.com/your-repo.git",
+        "branch": "main",
+        "buildProperties": {
+          "appLocation": "frontend",
+          "apiLocation": "functions",
+          "appArtifactLocation": "frontend/build"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2021-06-01",
+      "name": "[parameters('postgresServerName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "B_Standard_B1ms",
+        "tier": "Burstable"
+      },
+      "properties": {
+        "administratorLogin": "[parameters('postgresAdminUser')]",
+        "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+        "version": "13",
+        "storage": { "storageSizeGB": 32 },
+        "network": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "staticWebAppUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(parameters('staticWebAppName')).defaultHostname)]"
+    },
+    "functionAppUrl": {
+      "type": "string",
+      "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net')]"
+    }
+  }
+}
+EOF
+
+############################
+# Deploy Script (deploy.sh)
+############################
+cat << 'EOF' > deploy.sh
+#!/bin/bash
+# This deploy script automates the deployment of the slpyvky project to Azure.
+set -e
+
+# Variables – modify these as needed for your environment
+RESOURCE_GROUP="slpyvky-rg"
+REGION="eastus"
+STATIC_APP_NAME="slpyvky-static"
+FUNCTION_APP_NAME="slpyvky-function"
+SIGNALR_NAME="slpyvky-signalr"
+POSTGRES_NAME="slpyvky-postgres"
+POSTGRES_ADMIN="pgadmin"
+POSTGRES_PASSWORD="P@ssw0rd!"
+
+echo "Building frontend (React app)..."
+pushd frontend
+npm install
+npm run build
+popd
+
+echo "Preparing Azure Functions (backend)..."
+pushd functions
+npm install
+npm run build
+popd
+
+echo "Creating resource group..."
+az group create --name \$RESOURCE_GROUP --location \$REGION
+
+echo "Deploying ARM template (creating Azure services)..."
+az deployment group create --resource-group \$RESOURCE_GROUP --template-file arm-template.json --parameters \
+    staticWebAppName=\$STATIC_APP_NAME \
+    functionAppName=\$FUNCTION_APP_NAME \
+    signalrName=\$SIGNALR_NAME \
+    postgresServerName=\$POSTGRES_NAME \
+    postgresAdminUser=\$POSTGRES_ADMIN \
+    postgresAdminPassword=\$POSTGRES_PASSWORD \
+    location=\$REGION
+
+echo "Deploying Azure Functions code to Function App..."
+pushd functions
+func azure functionapp publish \$FUNCTION_APP_NAME --no-build
+popd
+
+echo "Deploying Static Web App content..."
+if ! command -v swa &> /dev/null; then
+    npm install -g @azure/static-web-apps-cli
+fi
+SWA_TOKEN=\$(az staticwebapp secrets list -n \$STATIC_APP_NAME -g \$RESOURCE_GROUP --query "properties.apiKey" -o tsv)
+swa deploy --app-name \$STATIC_APP_NAME --resource-group \$RESOURCE_GROUP --tenant-id "\$(az account show --query tenantId -o tsv)" \
+    --subscription-id "\$(az account show --query id -o tsv)" --env production --deployment-token \$SWA_TOKEN \
+    --folder frontend/build
+
+echo "Deployment complete."
+STATIC_URL=\$(az staticwebapp show -n \$STATIC_APP_NAME -g \$RESOURCE_GROUP --query "defaultHostname" -o tsv)
+FUNC_URL="https://\$FUNCTION_APP_NAME.azurewebsites.net"
+echo "Static Web App URL: https://\$STATIC_URL"
+echo "Function App base URL: \$FUNC_URL/api"
+EOF
+
+chmod +x deploy.sh
+
+echo "Project scaffold created successfully."
+echo "Please review the generated files and modify any placeholders (e.g. secrets, endpoint URLs) before deploying."
