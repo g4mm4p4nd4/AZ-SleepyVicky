@@ -1,580 +1,501 @@
-#!/bin/bash
-# create-slpyvky-azure-serverless.sh
-# This script creates a complete scaffold for an Azure Serverless Deployment project named "slpyvky".
-# It sets up a React frontend, Azure Functions backend (refactored from Express),
-# an ARM template for IaC, and a deployment script.
-# ----------------------------------------------------------------------
-# Code Review Notes:
-# - Ensure that all secret placeholders (e.g. DATABASE_URL, TWILIO credentials, etc.) are updated before production.
-# - The resource names follow Azure naming conventions and include the project name "slpyvky".
-# - The SignalR hub name has been updated to "slpyvky-mediahub" for consistency.
-# - Validate that the ARM template parameters and deploy script variables match your desired configuration.
-# ----------------------------------------------------------------------
-
-set -e
-
-echo "Creating project scaffold for Azure Serverless Deployment: slpyvky..."
-
-############################
-# Create Frontend Directory
-############################
-mkdir -p frontend/public frontend/src
-
-# frontend/package.json
-cat << 'EOF' > frontend/package.json
-{
-  "name": "frontend",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build"
-  },
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
-  },
-  "devDependencies": {
-    "react-scripts": "5.0.1",
-    "typescript": "^4.9.5"
-  }
-}
-EOF
-
-# frontend/public/index.html
-cat << 'EOF' > frontend/public/index.html
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>slpyvky Azure Serverless App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>
-EOF
-
-# frontend/src/App.tsx
-cat << 'EOF' > frontend/src/App.tsx
-import React, { useEffect, useState } from 'react';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:7071/api';
-
-function App() {
-  const [calls, setCalls] = useState<any[]>([]);
-
-  useEffect(() => {
-    fetch(\`\${API_URL}/GetCallsFunction\`)
-      .then(res => res.json())
-      .then(data => setCalls(data))
-      .catch(err => console.error(err));
-  }, []);
-
-  return (
-    <div style={{ padding: '2rem' }}>
-      <h1>slpyvky Azure Serverless App</h1>
-      <p>This is the refactored React frontend deployed as a Static Web App.</p>
-      <h2>Calls</h2>
-      <ul>
-        {calls.map(call => (
-          <li key={call.id}>{call.phoneNumber} - {call.status}</li>
-        ))}
-      </ul>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Voice Assistant Dashboard</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet" />
+  <style>
+    .call-item:hover {
+      background-color: rgba(59, 130, 246, 0.1);
+    }
+    .loading-ring {
+      display: inline-block;
+      width: 30px;
+      height: 30px;
+    }
+    .loading-ring:after {
+      content: " ";
+      display: block;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 3px solid #3b82f6;
+      border-color: #3b82f6 transparent #3b82f6 transparent;
+      animation: loading-ring 1.2s linear infinite;
+    }
+    @keyframes loading-ring {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <header class="bg-white shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between items-center py-4">
+        <div class="flex items-center">
+          <svg class="h-8 w-8 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+          </svg>
+          <h1 class="ml-2 text-xl font-semibold text-gray-900">AI Voice Assistant Dashboard</h1>
+        </div>
+        <div>
+          <span id="connection-status" class="px-3 py-1 text-sm text-white bg-green-500 rounded-full">
+            <i class="fas fa-circle text-xs"></i> Connected
+          </span>
+        </div>
+      </div>
     </div>
-  );
-}
+  </header>
 
-export default App;
-EOF
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Left Column: Outbound Call Panel -->
+      <div class="lg:col-span-1">
+        <div class="bg-white shadow rounded-lg p-6">
+          <h2 class="text-lg font-semibold mb-4">Make an Outbound Call</h2>
+          <form id="outbound-call-form">
+            <div class="mb-4">
+              <label for="phone-number" class="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+              <input type="tel" id="phone-number" name="phone-number" placeholder="+1 (555) 123-4567" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+            </div>
+            <div class="mb-4">
+              <label for="call-purpose" class="block text-sm font-medium text-gray-700 mb-1">Call Purpose</label>
+              <select id="call-purpose" name="call-purpose" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                <option value="customer-support">Customer Support</option>
+                <option value="information">Information Inquiry</option>
+                <option value="appointment">Appointment Reminder</option>
+                <option value="follow-up">Follow-up Call</option>
+                <option value="custom">Custom Script</option>
+              </select>
+            </div>
+            <div id="custom-script-container" class="mb-4 hidden">
+              <label for="custom-script" class="block text-sm font-medium text-gray-700 mb-1">Custom Script</label>
+              <textarea id="custom-script" name="custom-script" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"></textarea>
+            </div>
+            <div class="mb-4">
+              <label for="scheduled-time" class="block text-sm font-medium text-gray-700 mb-1">Schedule Call</label>
+              <input type="datetime-local" id="scheduled-time" name="scheduled-time" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+              <p class="mt-1 text-xs text-gray-500">Leave blank to call immediately</p>
+            </div>
+            <button type="submit" id="call-button" class="w-full px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+              <i class="fas fa-phone-alt mr-2"></i>Make Call
+            </button>
+          </form>
+          <div id="call-status" class="mt-4 hidden">
+            <div class="flex items-center p-3 bg-blue-50 text-blue-700 rounded-md">
+              <div class="loading-ring mr-3"></div>
+              <span class="call-status-message">Initiating call...</span>
+            </div>
+          </div>
+        </div>
 
-# frontend/src/index.tsx
-cat << 'EOF' > frontend/src/index.tsx
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
+        <!-- Call Templates Panel -->
+        <div class="bg-white shadow rounded-lg p-6 mt-6">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-semibold">Call Templates</h2>
+            <button id="add-template" class="text-blue-600 hover:text-blue-800">
+              <i class="fas fa-plus-circle"></i> Add New
+            </button>
+          </div>
+          <div class="space-y-3" id="templates-container">
+            <div class="call-item p-3 border border-gray-200 rounded-md cursor-pointer" data-script="Welcome to our service!">
+              <div class="font-medium">Welcome Call</div>
+              <div class="text-sm text-gray-500">New customer onboarding</div>
+            </div>
+            <div class="call-item p-3 border border-gray-200 rounded-md cursor-pointer" data-script="This is your appointment reminder.">
+              <div class="font-medium">Appointment Reminder</div>
+              <div class="text-sm text-gray-500">Confirm upcoming appointment</div>
+            </div>
+            <div class="call-item p-3 border border-gray-200 rounded-md cursor-pointer" data-script="Follow-up on your recent support query.">
+              <div class="font-medium">Support Follow-up</div>
+              <div class="text-sm text-gray-500">Check satisfaction after support ticket</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-const root = ReactDOM.createRoot(document.getElementById('root')!);
-root.render(<App />);
-EOF
+      <!-- Middle Column: Schedule and History Panel -->
+      <div class="lg:col-span-2">
+        <div class="bg-white shadow rounded-lg p-6 mb-6">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-semibold">Scheduled Calls</h2>
+            <div>
+              <select id="schedule-view-filter" class="text-sm border border-gray-300 rounded-md py-1 px-2">
+                <option value="today">Today</option>
+                <option value="week">This Week</option>
+                <option value="all">All Scheduled</option>
+              </select>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone Number</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Purpose</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="bg-white divide-y divide-gray-200" id="scheduled-calls-table">
+                <!-- Dummy scheduled calls for demonstration -->
+                <tr>
+                  <td class="px-4 py-4 text-sm text-gray-900">Today, 2:30 PM</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">+1 (555) 123-4567</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">Appointment Reminder</td>
+                  <td class="px-4 py-4 text-sm"><span class="px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800">Scheduled</span></td>
+                  <td class="px-4 py-4 text-right text-sm">
+                    <button class="text-blue-600 hover:text-blue-800 mr-3"><i class="fas fa-edit"></i></button>
+                    <button class="text-red-600 hover:text-red-800"><i class="fas fa-trash-alt"></i></button>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="px-4 py-4 text-sm text-gray-900">Tomorrow, 10:15 AM</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">+1 (555) 987-6543</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">Follow-up Call</td>
+                  <td class="px-4 py-4 text-sm"><span class="px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800">Scheduled</span></td>
+                  <td class="px-4 py-4 text-right text-sm">
+                    <button class="text-blue-600 hover:text-blue-800 mr-3"><i class="fas fa-edit"></i></button>
+                    <button class="text-red-600 hover:text-red-800"><i class="fas fa-trash-alt"></i></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-# frontend/staticwebapp.config.json (updated with slpyvky-function)
-cat << 'EOF' > frontend/staticwebapp.config.json
-{
-  "routes": [
-    {
-      "route": "/api/*",
-      "rewrite": "https://slpyvky-function.azurewebsites.net/api/{*rest}"
-    },
-    {
-      "route": "/*",
-      "serve": "/index.html"
+        <!-- Recent Calls Panel -->
+        <div class="bg-white shadow rounded-lg p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-semibold">Recent Calls</h2>
+            <button id="refresh-history" class="text-blue-600 hover:text-blue-800">
+              <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone Number</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Direction</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="bg-white divide-y divide-gray-200">
+                <tr>
+                  <td class="px-4 py-4 text-sm text-gray-900">Today, 10:23 AM</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">+1 (555) 123-4567</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">Outbound</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">2m 34s</td>
+                  <td class="px-4 py-4 text-sm"><span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">Completed</span></td>
+                  <td class="px-4 py-4 text-right text-sm">
+                    <button class="text-blue-600 hover:text-blue-800 mr-2"><i class="fas fa-info-circle"></i></button>
+                    <button class="text-blue-600 hover:text-blue-800"><i class="fas fa-redo"></i></button>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="px-4 py-4 text-sm text-gray-900">Today, 9:45 AM</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">+1 (555) 987-6543</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">Inbound</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">3m 12s</td>
+                  <td class="px-4 py-4 text-sm"><span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">Completed</span></td>
+                  <td class="px-4 py-4 text-right text-sm">
+                    <button class="text-blue-600 hover:text-blue-800 mr-2"><i class="fas fa-info-circle"></i></button>
+                    <button class="text-blue-600 hover:text-blue-800"><i class="fas fa-redo"></i></button>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="px-4 py-4 text-sm text-gray-900">Yesterday, 3:18 PM</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">+1 (555) 456-7890</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">Outbound</td>
+                  <td class="px-4 py-4 text-sm text-gray-900">0m 0s</td>
+                  <td class="px-4 py-4 text-sm"><span class="px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">Failed</span></td>
+                  <td class="px-4 py-4 text-right text-sm">
+                    <button class="text-blue-600 hover:text-blue-800 mr-2"><i class="fas fa-info-circle"></i></button>
+                    <button class="text-blue-600 hover:text-blue-800"><i class="fas fa-redo"></i></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Call Details Modal -->
+  <div id="call-details-modal" class="fixed inset-0 bg-gray-500 bg-opacity-75 hidden flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg max-w-lg w-full mx-4 shadow-xl">
+      <div class="flex justify-between items-center border-b px-6 py-4">
+        <h3 class="text-lg font-semibold">Call Details</h3>
+        <button id="close-modal" class="text-gray-500 hover:text-gray-700 focus:outline-none">
+          <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="px-6 py-4">
+        <!-- Static call details for demonstration -->
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <p class="text-sm text-gray-500">Call SID</p>
+            <p class="font-medium">CA1234567890abcdef</p>
+          </div>
+          <div>
+            <p class="text-sm text-gray-500">Date & Time</p>
+            <p class="font-medium">Feb 25, 2025 10:23 AM</p>
+          </div>
+          <div>
+            <p class="text-sm text-gray-500">Phone Number</p>
+            <p class="font-medium">+1 (555) 123-4567</p>
+          </div>
+          <div>
+            <p class="text-sm text-gray-500">Duration</p>
+            <p class="font-medium">2m 34s</p>
+          </div>
+          <div>
+            <p class="text-sm text-gray-500">Direction</p>
+            <p class="font-medium">Outbound</p>
+          </div>
+          <div>
+            <p class="text-sm text-gray-500">Status</p>
+            <p class="font-medium">Completed</p>
+          </div>
+        </div>
+        <div class="mb-4">
+          <p class="text-sm text-gray-500 mb-1">Call Purpose</p>
+          <p class="font-medium">Appointment Reminder</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-500 mb-1">Conversation Transcript</p>
+          <div class="border rounded-md p-3 max-h-60 overflow-y-auto text-sm">
+            <p class="mb-2"><strong>AI Assistant (10:23:05 AM):</strong> Hello, this is an AI assistant calling from a Twilio powered service. I'm calling to remind you about your appointment tomorrow at 2:30 PM. Is this a good time to talk?</p>
+            <p class="mb-2"><strong>User (10:23:12 AM):</strong> Yes, I can talk now.</p>
+            <p class="mb-2"><strong>AI Assistant (10:23:15 AM):</strong> Great. Your appointment is scheduled for tomorrow, February 26th at 2:30 PM with Dr. Smith. Would you like to confirm this appointment?</p>
+            <p class="mb-2"><strong>User (10:23:24 AM):</strong> Yes, I'll be there.</p>
+            <p class="mb-2"><strong>AI Assistant (10:23:27 AM):</strong> Perfect. Your appointment has been confirmed. Please remember to arrive 15 minutes early. Is there anything else I can help you with today?</p>
+            <p><strong>User (10:23:36 AM):</strong> No, that's all. Thank you.</p>
+          </div>
+        </div>
+      </div>
+      <div class="bg-gray-50 px-6 py-4 flex justify-end rounded-b-lg">
+        <button id="download-transcript" class="mr-2 px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+          Download Transcript
+        </button>
+        <button id="replay-call" class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+          Replay Call
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Template Modal -->
+  <div id="template-modal" class="fixed inset-0 bg-gray-500 bg-opacity-75 hidden flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg max-w-lg w-full mx-4 shadow-xl">
+      <div class="flex justify-between items-center border-b px-6 py-4">
+        <h3 class="text-lg font-semibold">Add Call Template</h3>
+        <button id="close-template-modal" class="text-gray-500 hover:text-gray-700 focus:outline-none">
+          <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="px-6 py-4">
+        <form id="template-form">
+          <div class="mb-4">
+            <label for="template-name" class="block text-sm font-medium text-gray-700 mb-1">Template Name</label>
+            <input type="text" id="template-name" name="template-name" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+          </div>
+          <div class="mb-4">
+            <label for="template-description" class="block text-sm font-medium text-gray-700 mb-1">Short Description</label>
+            <input type="text" id="template-description" name="template-description" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+          </div>
+          <div class="mb-4">
+            <label for="template-script" class="block text-sm font-medium text-gray-700 mb-1">Initial Script</label>
+            <textarea id="template-script" name="template-script" rows="4" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"></textarea>
+            <p class="mt-1 text-xs text-gray-500">This is the initial prompt for the AI assistant</p>
+          </div>
+        </form>
+      </div>
+      <div class="bg-gray-50 px-6 py-4 flex justify-end rounded-b-lg">
+        <button id="cancel-template" class="mr-2 px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+          Cancel
+        </button>
+        <button id="save-template" class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+          Save Template
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // API endpoint configuration
+    const API_ENDPOINT = "https://func-slpyvky-dev-eus2.azurewebsites.net/api";
+    let callSid = null;
+    let scheduledCalls = [];
+
+    // DOM elements
+    const callPurpose = document.getElementById('call-purpose');
+    const customScriptContainer = document.getElementById('custom-script-container');
+    const callStatus = document.getElementById('call-status');
+    const outboundCallForm = document.getElementById('outbound-call-form');
+    const callDetailsModal = document.getElementById('call-details-modal');
+    const templateModal = document.getElementById('template-modal');
+    const connectionStatus = document.getElementById('connection-status');
+
+    // Event listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      initScheduledCalls();
+      callPurpose.addEventListener('change', toggleCustomScript);
+      outboundCallForm.addEventListener('submit', handleOutboundCall);
+
+      document.getElementById('close-modal').addEventListener('click', () => {
+        callDetailsModal.classList.add('hidden');
+      });
+
+      document.getElementById('add-template').addEventListener('click', () => {
+        templateModal.classList.remove('hidden');
+      });
+
+      document.getElementById('close-template-modal').addEventListener('click', () => {
+        templateModal.classList.add('hidden');
+      });
+
+      document.getElementById('cancel-template').addEventListener('click', () => {
+        templateModal.classList.add('hidden');
+      });
+
+      document.getElementById('save-template').addEventListener('click', saveTemplate);
+
+      document.querySelectorAll('.fa-info-circle').forEach(btn => {
+        btn.parentElement.addEventListener('click', showCallDetails);
+      });
+
+      document.querySelectorAll('.call-item').forEach(item => {
+        item.addEventListener('click', selectTemplate);
+      });
+
+      simulateConnectionStatus();
+    });
+
+    // Toggle custom script textarea visibility
+    function toggleCustomScript() {
+      if (callPurpose.value === 'custom') {
+        customScriptContainer.classList.remove('hidden');
+      } else {
+        customScriptContainer.classList.add('hidden');
+      }
     }
-  ]
-}
-EOF
 
-#################################
-# Create Functions Directory Tree
-#################################
-mkdir -p functions/VoiceFunction functions/GetCallsFunction functions/CreateCallFunction functions/SignalRNegotiate functions/shared
-
-# functions/host.json
-cat << 'EOF' > functions/host.json
-{
-  "version": "2.0"
-}
-EOF
-
-# functions/local.settings.json (for local testing)
-cat << 'EOF' > functions/local.settings.json
-{
-  "IsEncrypted": false,
-  "Values": {
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "FUNCTIONS_WORKER_RUNTIME": "node",
-    "DATABASE_URL": "<your-database-connection-string>",
-    "TWILIO_ACCOUNT_SID": "<your-twilio-sid>",
-    "TWILIO_AUTH_TOKEN": "<your-twilio-auth-token>",
-    "TWILIO_PHONE_NUMBER": "<your-twilio-phone-number>",
-    "OPENAI_API_KEY": "<your-openai-api-key>",
-    "SIGNALR_MEDIA_STREAM_URL": "wss://slpyvky-signalr.azurewebsites.net/slpyvky-mediahub"
-  }
-}
-EOF
-
-##############################################
-# functions/VoiceFunction (Twilio Webhook)
-##############################################
-# functions/VoiceFunction/index.ts
-cat << 'EOF' > functions/VoiceFunction/index.ts
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
-import twilio from "twilio";
-
-const voiceFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
-    const VoiceResponse = twilio.twiml.VoiceResponse;
-    const response = new VoiceResponse();
-    
-    // Use environment variable for media stream URL (pointing to your SignalR/Web PubSub negotiate endpoint)
-    const mediaStreamUrl = process.env.SIGNALR_MEDIA_STREAM_URL || "wss://slpyvky-signalr.azurewebsites.net/slpyvky-mediahub";
-    const connect = response.connect();
-    connect.stream({ url: mediaStreamUrl });
-
-    context.res = {
-        status: 200,
-        headers: { "Content-Type": "text/xml" },
-        body: response.toString()
-    };
-};
-
-export default voiceFunction;
-EOF
-
-# functions/VoiceFunction/function.json
-cat << 'EOF' > functions/VoiceFunction/function.json
-{
-  "bindings": [
-    {
-      "authLevel": "anonymous",
-      "type": "httpTrigger",
-      "direction": "in",
-      "name": "req",
-      "methods": ["post"],
-      "route": "voice"
-    },
-    {
-      "type": "http",
-      "direction": "out",
-      "name": "res"
+    // Initialize scheduled calls (simulate fetching from API)
+    function initScheduledCalls() {
+      // For demonstration, scheduled calls remain static.
+      console.log("Scheduled calls initialized.");
     }
-  ]
-}
-EOF
 
-##############################################
-# functions/GetCallsFunction (GET /api/calls)
-##############################################
-# functions/GetCallsFunction/index.ts
-cat << 'EOF' > functions/GetCallsFunction/index.ts
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
-import { db } from "../shared/db";
-import { calls } from "../shared/schema";
+    // Handle outbound call form submission
+    async function handleOutboundCall(event) {
+      event.preventDefault();
+      const phoneNumber = document.getElementById('phone-number').value;
+      const callPurposeValue = callPurpose.value;
+      const customScript = document.getElementById('custom-script').value;
+      const scheduledTime = document.getElementById('scheduled-time').value;
 
-const getCallsFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
-    try {
-        const allCalls = await db.select().from(calls);
-        context.res = {
-            status: 200,
-            body: allCalls
-        };
-    } catch (error) {
-        context.log.error("Failed to fetch calls", error);
-        context.res = {
-            status: 500,
-            body: { error: "Failed to fetch calls" }
-        };
-    }
-};
+      callStatus.classList.remove('hidden');
+      const statusMessage = callStatus.querySelector('.call-status-message');
+      statusMessage.textContent = "Initiating call...";
 
-export default getCallsFunction;
-EOF
+      const payload = {
+        phoneNumber: phoneNumber,
+        callPurpose: callPurposeValue,
+        customScript: customScript,
+        scheduledTime: scheduledTime
+      };
 
-# functions/GetCallsFunction/function.json
-cat << 'EOF' > functions/GetCallsFunction/function.json
-{
-  "bindings": [
-    {
-      "authLevel": "anonymous",
-      "type": "httpTrigger",
-      "direction": "in",
-      "name": "req",
-      "methods": ["get"],
-      "route": "GetCallsFunction"
-    },
-    {
-      "type": "http",
-      "direction": "out",
-      "name": "res"
-    }
-  ]
-}
-EOF
-
-##############################################
-# functions/CreateCallFunction (POST /api/calls)
-##############################################
-# functions/CreateCallFunction/index.ts
-cat << 'EOF' > functions/CreateCallFunction/index.ts
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
-import { db } from "../shared/db";
-import { calls, insertCallSchema } from "../shared/schema";
-import { ZodError } from "zod";
-
-const createCallFunction: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
-    try {
-        const data = insertCallSchema.parse(req.body);
-        const newCall = await db.insert(calls).values(data).returning();
-        context.res = {
-            status: 200,
-            body: newCall
-        };
-    } catch (error) {
-        if (error instanceof ZodError) {
-            context.log.warn("Validation error", error.errors);
-            context.res = {
-                status: 400,
-                body: { error: error.errors }
-            };
+      try {
+        const response = await fetch(API_ENDPOINT + '/call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (result.success) {
+          statusMessage.textContent = "Call initiated successfully. Call SID: " + result.callSid;
+          callSid = result.callSid;
         } else {
-            context.log.error("Error creating call", error);
-            context.res = {
-                status: 500,
-                body: { error: "Failed to schedule call" }
-            };
+          statusMessage.textContent = "Call initiation failed: " + (result.error || result.message);
         }
-    }
-};
-
-export default createCallFunction;
-EOF
-
-# functions/CreateCallFunction/function.json
-cat << 'EOF' > functions/CreateCallFunction/function.json
-{
-  "bindings": [
-    {
-      "authLevel": "anonymous",
-      "type": "httpTrigger",
-      "direction": "in",
-      "name": "req",
-      "methods": ["post"],
-      "route": "CreateCallFunction"
-    },
-    {
-      "type": "http",
-      "direction": "out",
-      "name": "res"
-    }
-  ]
-}
-EOF
-
-##############################################
-# SignalR Negotiate Function (Optional)
-##############################################
-# functions/SignalRNegotiate/index.ts
-cat << 'EOF' > functions/SignalRNegotiate/index.ts
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
-
-const signalRNegotiate: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
-    // The output binding will automatically provide the connection info.
-    context.bindings.signalRConnectionInfo = {};
-};
-
-export default signalRNegotiate;
-EOF
-
-# functions/SignalRNegotiate/function.json
-cat << 'EOF' > functions/SignalRNegotiate/function.json
-{
-  "bindings": [
-    {
-      "authLevel": "anonymous",
-      "type": "httpTrigger",
-      "direction": "in",
-      "name": "req",
-      "methods": ["get", "post"],
-      "route": "negotiate"
-    },
-    {
-      "name": "signalRConnectionInfo",
-      "type": "signalRConnectionInfo",
-      "direction": "out",
-      "hubName": "slpyvky-mediahub"
-    }
-  ]
-}
-EOF
-
-##############################################
-# functions/shared/schema.ts
-##############################################
-cat << 'EOF' > functions/shared/schema.ts
-import { pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
-
-export const calls = pgTable("calls", {
-  id: serial("id").primaryKey(),
-  phoneNumber: text("phone_number").notNull(),
-  status: text("status").notNull().default("pending"),
-  startTime: timestamp("start_time").notNull().defaultNow(),
-  endTime: timestamp("end_time"),
-  duration: text("duration"),
-  callSid: text("call_sid").unique(),
-  scheduledTime: timestamp("scheduled_time"),
-  timezone: text("timezone")
-});
-
-export const insertCallSchema = createInsertSchema(calls).pick({
-  phoneNumber: true,
-  scheduledTime: true,
-  timezone: true
-}).extend({
-  phoneNumber: z.string().min(10, "Phone number must be at least 10 digits").max(15, "Phone number cannot exceed 15 digits").regex(/^\+?[1-9]\d{9,14}$/, "Invalid phone number format"),
-  scheduledTime: z.string().datetime().optional(),
-  timezone: z.string().optional()
-});
-EOF
-
-##############################################
-# functions/shared/db.ts
-##############################################
-cat << 'EOF' > functions/shared/db.ts
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
-import * as schema from "./schema";
-
-neonConfig.webSocketConstructor = require("ws");
-
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL must be set");
-}
-
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export const db = drizzle({ client: pool, schema });
-EOF
-
-############################
-# ARM Template (IaC)
-############################
-cat << 'EOF' > arm-template.json
-{
-  "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.0.0",
-  "parameters": {
-    "staticWebAppName": { "type": "string", "defaultValue": "slpyvky-static" },
-    "functionAppName": { "type": "string", "defaultValue": "slpyvky-function" },
-    "signalrName": { "type": "string", "defaultValue": "slpyvky-signalr" },
-    "postgresServerName": { "type": "string", "defaultValue": "slpyvky-postgres" },
-    "postgresAdminUser": { "type": "string" },
-    "postgresAdminPassword": { "type": "securestring" },
-    "location": { "type": "string", "defaultValue": "[resourceGroup().location]" }
-  },
-  "resources": [
-    {
-      "type": "Microsoft.Storage/storageAccounts",
-      "apiVersion": "2022-09-01",
-      "name": "[toLower(concat(parameters('functionAppName'), 'storage'))]",
-      "location": "[parameters('location')]",
-      "sku": { "name": "Standard_LRS" },
-      "kind": "StorageV2",
-      "properties": {}
-    },
-    {
-      "type": "Microsoft.Web/serverfarms",
-      "apiVersion": "2022-03-01",
-      "name": "[concat(parameters('functionAppName'), 'plan')]",
-      "location": "[parameters('location')]",
-      "sku": { "name": "Y1", "tier": "Dynamic" },
-      "properties": {}
-    },
-    {
-      "type": "Microsoft.Web/sites",
-      "apiVersion": "2022-03-01",
-      "name": "[parameters('functionAppName')]",
-      "location": "[parameters('location')]",
-      "kind": "functionapp",
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', toLower(concat(parameters('functionAppName'), 'storage')))]",
-        "[resourceId('Microsoft.Web/serverfarms', concat(parameters('functionAppName'), 'plan'))]"
-      ],
-      "properties": {
-        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', concat(parameters('functionAppName'), 'plan'))]",
-        "siteConfig": {
-          "appSettings": [
-            { "name": "FUNCTIONS_WORKER_RUNTIME", "value": "node" },
-            { "name": "WEBSITE_RUN_FROM_PACKAGE", "value": "1" },
-            { "name": "DATABASE_URL", "value": "<your-database-connection-string>" },
-            { "name": "TWILIO_ACCOUNT_SID", "value": "<your-twilio-sid>" },
-            { "name": "TWILIO_AUTH_TOKEN", "value": "<your-twilio-auth-token>" },
-            { "name": "TWILIO_PHONE_NUMBER", "value": "<your-twilio-phone-number>" },
-            { "name": "OPENAI_API_KEY", "value": "<your-openai-api-key>" },
-            { "name": "SIGNALR_MEDIA_STREAM_URL", "value": "wss://slpyvky-signalr.azurewebsites.net/slpyvky-mediahub" }
-          ]
-        }
-      }
-    },
-    {
-      "type": "Microsoft.SignalRService/SignalR",
-      "apiVersion": "2022-02-01",
-      "name": "[parameters('signalrName')]",
-      "location": "[parameters('location')]",
-      "sku": {
-        "name": "Free",
-        "tier": "Free"
-      },
-      "properties": {
-        "features": [
-          { "flag": "ServiceMode", "value": "Serverless" }
-        ]
-      }
-    },
-    {
-      "type": "Microsoft.Web/staticSites",
-      "apiVersion": "2022-03-01",
-      "name": "[parameters('staticWebAppName')]",
-      "location": "[parameters('location')]",
-      "kind": "static",
-      "properties": {
-        "repositoryUrl": "https://github.com/your-repo.git",
-        "branch": "main",
-        "buildProperties": {
-          "appLocation": "frontend",
-          "apiLocation": "functions",
-          "appArtifactLocation": "frontend/build"
-        }
-      }
-    },
-    {
-      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
-      "apiVersion": "2021-06-01",
-      "name": "[parameters('postgresServerName')]",
-      "location": "[parameters('location')]",
-      "sku": {
-        "name": "B_Standard_B1ms",
-        "tier": "Burstable"
-      },
-      "properties": {
-        "administratorLogin": "[parameters('postgresAdminUser')]",
-        "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
-        "version": "13",
-        "storage": { "storageSizeGB": 32 },
-        "network": {
-          "publicNetworkAccess": "Enabled"
-        }
+      } catch (error) {
+        statusMessage.textContent = "Error initiating call: " + error.message;
       }
     }
-  ],
-  "outputs": {
-    "staticWebAppUrl": {
-      "type": "string",
-      "value": "[concat('https://', reference(parameters('staticWebAppName')).defaultHostname)]"
-    },
-    "functionAppUrl": {
-      "type": "string",
-      "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net')]"
+
+    // Save a new call template
+    function saveTemplate() {
+      const templateName = document.getElementById('template-name').value;
+      const templateDescription = document.getElementById('template-description').value;
+      const templateScript = document.getElementById('template-script').value;
+
+      if (!templateName || !templateScript) {
+        alert("Template name and script are required.");
+        return;
+      }
+
+      const newTemplate = { name: templateName, description: templateDescription, script: templateScript };
+      addTemplateToUI(newTemplate);
+      document.getElementById('template-form').reset();
+      templateModal.classList.add('hidden');
     }
-  }
-}
-EOF
 
-############################
-# Deploy Script (deploy.sh)
-############################
-cat << 'EOF' > deploy.sh
-#!/bin/bash
-# This deploy script automates the deployment of the slpyvky project to Azure.
-set -e
+    // Add template to the Call Templates panel
+    function addTemplateToUI(template) {
+      const container = document.getElementById('templates-container');
+      const div = document.createElement('div');
+      div.className = 'call-item p-3 border border-gray-200 rounded-md cursor-pointer';
+      div.dataset.script = template.script;
+      div.innerHTML = `
+        <div class="font-medium">${template.name}</div>
+        <div class="text-sm text-gray-500">${template.description}</div>
+      `;
+      div.addEventListener('click', selectTemplate);
+      container.appendChild(div);
+    }
 
-# Variables – modify these as needed for your environment
-RESOURCE_GROUP="slpyvky-rg"
-REGION="eastus"
-STATIC_APP_NAME="slpyvky-static"
-FUNCTION_APP_NAME="slpyvky-function"
-SIGNALR_NAME="slpyvky-signalr"
-POSTGRES_NAME="slpyvky-postgres"
-POSTGRES_ADMIN="pgadmin"
-POSTGRES_PASSWORD="P@ssw0rd!"
+    // Show call details modal
+    function showCallDetails(event) {
+      callDetailsModal.classList.remove('hidden');
+    }
 
-echo "Building frontend (React app)..."
-pushd frontend
-npm install
-npm run build
-popd
+    // Select a template and load its script into the custom script textarea
+    function selectTemplate(event) {
+      const templateElement = event.currentTarget;
+      if (templateElement.dataset && templateElement.dataset.script) {
+        document.getElementById('custom-script').value = templateElement.dataset.script;
+        callPurpose.value = 'custom';
+        toggleCustomScript();
+      }
+    }
 
-echo "Preparing Azure Functions (backend)..."
-pushd functions
-npm install
-npm run build
-popd
-
-echo "Creating resource group..."
-az group create --name \$RESOURCE_GROUP --location \$REGION
-
-echo "Deploying ARM template (creating Azure services)..."
-az deployment group create --resource-group \$RESOURCE_GROUP --template-file arm-template.json --parameters \
-    staticWebAppName=\$STATIC_APP_NAME \
-    functionAppName=\$FUNCTION_APP_NAME \
-    signalrName=\$SIGNALR_NAME \
-    postgresServerName=\$POSTGRES_NAME \
-    postgresAdminUser=\$POSTGRES_ADMIN \
-    postgresAdminPassword=\$POSTGRES_PASSWORD \
-    location=\$REGION
-
-echo "Deploying Azure Functions code to Function App..."
-pushd functions
-func azure functionapp publish \$FUNCTION_APP_NAME --no-build
-popd
-
-echo "Deploying Static Web App content..."
-if ! command -v swa &> /dev/null; then
-    npm install -g @azure/static-web-apps-cli
-fi
-SWA_TOKEN=\$(az staticwebapp secrets list -n \$STATIC_APP_NAME -g \$RESOURCE_GROUP --query "properties.apiKey" -o tsv)
-swa deploy --app-name \$STATIC_APP_NAME --resource-group \$RESOURCE_GROUP --tenant-id "\$(az account show --query tenantId -o tsv)" \
-    --subscription-id "\$(az account show --query id -o tsv)" --env production --deployment-token \$SWA_TOKEN \
-    --folder frontend/build
-
-echo "Deployment complete."
-STATIC_URL=\$(az staticwebapp show -n \$STATIC_APP_NAME -g \$RESOURCE_GROUP --query "defaultHostname" -o tsv)
-FUNC_URL="https://\$FUNCTION_APP_NAME.azurewebsites.net"
-echo "Static Web App URL: https://\$STATIC_URL"
-echo "Function App base URL: \$FUNC_URL/api"
-EOF
-
-chmod +x deploy.sh
-
-echo "Project scaffold created successfully."
-echo "Please review the generated files and modify any placeholders (e.g. secrets, endpoint URLs) before deploying."
+    // Simulate API connection status updates
+    function simulateConnectionStatus() {
+      setInterval(() => {
+        const statuses = [
+          { text: "Connected", color: "bg-green-500" },
+          { text: "Disconnected", color: "bg-red-500" },
+          { text: "Reconnecting", color: "bg-yellow-500" }
+        ];
+        const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
+        connectionStatus.textContent = randomStatus.text;
+        connectionStatus.className = "px-3 py-1 text-sm text-white rounded-full " + randomStatus.color;
+      }, 5000);
+    }
+  </script>
+</body>
+</html>
